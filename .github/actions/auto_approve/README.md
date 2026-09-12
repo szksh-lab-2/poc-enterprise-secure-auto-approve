@@ -1,6 +1,22 @@
 # auto_approve
 
-A composite action which approves a pull request automatically if the pull request updates only files under `staging/`.
+A composite action which checks whether a pull request updates only files under `staging/`.
+
+This action implements the approval rule of this repository.
+It never approves a pull request itself and never handles an access token which can approve one,
+so the privileged part is isolated in the reusable workflow [auto_approve.yaml](../../workflows/auto_approve.yaml).
+
+| | This action | The reusable workflow |
+| --- | --- | --- |
+| Responsibility | The approval rule of this repository | Getting the access token and approving |
+| Access token | `GITHUB_TOKEN` (`pull-requests:read`) | A PAT from AWS Secrets Manager |
+| Expected to differ per repository | Yes | No |
+
+## Outputs
+
+| Name | Description |
+| --- | --- |
+| `ok` | `true` if the pull request updates only files under `staging/`, otherwise `false` |
 
 ## Structure
 
@@ -13,14 +29,10 @@ The check is separated from everything else so that the check is easy to test an
 | `actions.ts` | Helpers for the GitHub Actions runtime (environment variables, outputs, logs) |
 | `index.ts` | Wires them up: read the environment variables, list the updated files, run the check, and set the output |
 
-`index.ts` only decides whether the pull request can be approved and sets the output `ok` (`true` or `false`).
-Approving the pull request is done by the following steps of [action.yaml](action.yaml), so that an approval can be sent by an access token other than `GITHUB_TOKEN`.
-
 ## How it works
 
 1. `aquaproj/aqua-installer` installs [bun](https://bun.com) based on [aqua/aqua.yaml](aqua/aqua.yaml)
 1. `bun run index.ts` lists the updated files of the pull request via GitHub API, checks them, and sets the output `ok`
-1. If `ok` is `true`, the following steps get an access token and approve the pull request
 
 A renamed file is treated as an update of both the old path and the new path, so a file moved into `staging/` from the outside isn't approved.
 If the pull request updates no file, or updates more files than the GitHub API can list (3000), `ok` is `false`.
@@ -38,7 +50,8 @@ If the pull request updates no file, or updates more files than the GitHub API c
 ## Note
 
 This action doesn't dismiss approvals when a pull request is updated after being approved.
-Enable the branch protection rule `Dismiss stale pull request approvals when new commits are pushed` so that an approval for `staging/` only changes isn't reused for other changes.
+Enable the organization ruleset `Dismiss stale pull request approvals when new commits are pushed`
+and `Require approval of the most recent reviewable push`.
 
 ## Development
 

@@ -1,5 +1,13 @@
 name: auto-approve
-description: auto approve
+description: |
+  Check whether a pull request can be approved automatically.
+  This action implements the approval rule of this repository and never approves the pull request itself,
+  so it doesn't need any access token other than GITHUB_TOKEN.
+outputs:
+  ok:
+    description: |
+      "true" if the pull request updates only files under staging/, otherwise "false".
+    value: ${{steps.check.outputs.ok}}
 runs:
   using: composite
   steps:
@@ -19,13 +27,3 @@ runs:
         GITHUB_TOKEN: ${{github.token}}
         PULL_REQUEST_NUMBER: ${{github.event.pull_request.number}}
         PATH_PREFIXES: staging/
-    - name: Get PAT from AWS Secrets Manager
-      if: steps.check.outputs.ok == 'true'
-      id: token
-      shell: bash
-      run: echo "get"
-    - name: Approve
-      if: steps.check.outputs.ok == 'true'
-      run: echo "approve"
-      env:
-        GITHUB_TOKEN: ${{ steps.token.outputs.token }}
