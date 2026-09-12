@@ -1,1 +1,1 @@
-# test-auto-approve
+# poc-enterprise-secure-auto-approve
