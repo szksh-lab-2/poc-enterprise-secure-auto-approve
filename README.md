@@ -1,1 +1,1 @@
-# poc-enterprise-secure-auto-approve
+# PoC of Enterprise Secure Auto Approve
