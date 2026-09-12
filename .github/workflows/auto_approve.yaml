@@ -1,0 +1,15 @@
+---
+name: auto-approve
+on:
+  workflow_call: {}
+jobs:
+  approve:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # To resolve the action in this repository
+      pull-requests: read # To list the updated files of the pull request
+    timeout-minutes: 10
+    steps:
+      # $/ resolves to this repository at the commit which is running, so checkout isn't needed.
+      # https://github.blog/changelog/2026-07-30-reference-same-repository-actions-with-self-repository-syntax/
+      - uses: $/.github/actions/auto_approve
