@@ -1,0 +1,9 @@
+---
+# yaml-language-server: $schema=https://raw.githubusercontent.com/suzuki-shunsuke/pinact/main/json-schema/pinact.json
+version: 3
+ignore_actions:
+  # This reusable workflow must be referenced by a stable ref rather than a commit SHA.
+  # The AWS IAM trust policy pins job_workflow_ref to this ref, and a commit SHA would
+  # change it on every commit.
+  - name: szksh-lab-2/test-auto-approve/.github/workflows/auto_approve.yaml
+    ref: main
