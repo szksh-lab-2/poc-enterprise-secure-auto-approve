@@ -28,11 +28,8 @@ jobs:
       - run: bun test
       - run: bunx tsc --noEmit
 
-  # Approve this pull request if it updates only files under staging/.
-  # The reusable workflow is pinned to main so that job_workflow_ref is fixed and
-  # the approval logic can't be tampered with by this pull request.
   approve:
-    uses: szksh-lab-2/test-auto-approve/.github/workflows/auto_approve.yaml@main
+    uses: szksh-lab-2/test-auto-approve/.github/workflows/auto_approve.yaml@auto-approve
     permissions:
       contents: read
       pull-requests: read
