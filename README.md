@@ -428,6 +428,15 @@ PAT と AWS の認証情報は approve 用の Reusable Workflow の job に存�
 - PR に由来する値は `env` 経由で渡し、 `run` に直接展開しない
 - 共有の Reusable Workflow が `inputs` を受け取る場合も、それを `run` に直接展開しない
 
+### job_workflow_ref とは
+
+https://docs.github.com/en/actions/reference/security/oidc#custom-claims-provided-by-github
+
+> For jobs using a reusable workflow, the ref path to the reusable workflow. For more information, see [Using OpenID Connect with reusable workflows](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-with-reusable-workflows).
+
+approve のための PAT は信頼できる workflow からのみ取得できる必要があります。
+PAT を AWS Secrets Manager から取得する IAM Role を OIDC で assume　する条件を job_workflow_ref で信頼できる protected branch で管理されている Reusable Workflow からのみに制限します。
+
 ### 実際の `sub` claim を確認する
 
 Assume Role に失敗したときは、まず実際に発行された `sub` を確認します。
