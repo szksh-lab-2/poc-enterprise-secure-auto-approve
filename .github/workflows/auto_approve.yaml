@@ -22,22 +22,32 @@ jobs:
       # The AWS IAM role restricts the access by job_workflow_ref, so the token isn't
       # available from workflows other than this one.
       - name: Get PAT from AWS Secrets Manager
-        if: steps.check.outputs.ok == 'true'
+        # if: steps.check.outputs.ok == 'true'
         id: token
-        shell: bash
-        run: echo "get"
+        uses: suzuki-shunsuke/aws-secrets-manager-get-action@pr/836
+        with:
+          role_to_assume: arn:aws:iam::455828037039:role/github_auto_approve
+          secrets: |
+            - secret_id: arn:aws:secretsmanager:ap-northeast-1:455828037039:secret:github-auto-approve-hLZWVe
+              values:
+                - key: GITHUB_TOKEN
+                  output_name: token
 
       # commit_id fixes the commit to approve.
       # Without it the review would be created against the head at this moment,
       # which can be a commit newer than the one the check validated.
       - name: Approve
-        if: steps.check.outputs.ok == 'true'
+        # if: steps.check.outputs.ok == 'true'
         shell: bash
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
-            -f event=APPROVE \
-            -f commit_id="$HEAD_SHA" \
-            -f body="$REVIEW_BODY"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            /user
+          # gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" \
+          #   -f event=APPROVE \
+          #   -f commit_id="$HEAD_SHA" \
+          #   -f body="$REVIEW_BODY"
         env:
           GH_TOKEN: ${{steps.token.outputs.token}}
           PR_NUMBER: ${{github.event.pull_request.number}}
