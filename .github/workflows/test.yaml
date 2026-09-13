@@ -15,7 +15,7 @@ jobs:
       - run: echo hello
 
   approve:
-    uses: szksh-lab-2/test-auto-approve/.github/workflows/auto_approve.yaml@auto-approve
+    uses: szksh-lab-2/poc-enterprise-secure-auto-approve/.github/workflows/auto_approve.yaml@auto-approve
     needs: test
     permissions:
       contents: read # To resolve the action in the reusable workflow's repository
