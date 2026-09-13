@@ -18,5 +18,6 @@ jobs:
     uses: szksh-lab-2/test-auto-approve/.github/workflows/auto_approve.yaml@auto-approve
     needs: test
     permissions:
-      contents: read
-      pull-requests: read
+      contents: read # To resolve the action in the reusable workflow's repository
+      pull-requests: read # To list the updated files of the pull request
+      id-token: write # To get an OIDC token to assume the AWS IAM role
