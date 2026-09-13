@@ -32,6 +32,7 @@
 - approve 専用の Machine User を用意
 - AWS Secrets Manager などで PAT を管理し、 OIDC で許可された Reusable Workflow からのみ PAT を取得可能にする
   - OIDC の `sub` claim をカスタマイズし、 repository と workflow の組み合わせを一つの claim で固定する
+    - Organization のテンプレートを設定するだけでは適用されず、リポジトリごとの opt in が必要
 - 再利用できるコードは独立した repository で action, reusable workflow 化する
   - AWS Secrets Manager などから PAT を取得し、 approve
   - auto approve の可否を check する汎用的なロジック
@@ -52,6 +53,7 @@
     1. fine-grained PAT を AWS Secrets Manager に保存
 1. 再利用できるコードを独立した repository で action, reusable workflow 化
 1. 各リポジトリで approve するための設定
+    1. OIDC の `sub` claim のカスタマイズに opt in
     1. Branch Ruleset で auto approve する　PR の base branch を保護
     1. Machine User に push 権限を付与し、 CODEOWNERS に追加
     1. (必要であれば) `auto-approve` branch に Reusable Workflow の作成 (branch の作成は Organization admin のみ)
@@ -101,6 +103,8 @@ https://zenn.dev/shunsuke_suzuki/articles/how-to-manage-github-actions-required-
 
 ### Organization の OIDC の `sub` claim をカスタマイズ
 
+https://docs.github.com/en/rest/actions/oidc?apiVersion=2022-11-28#set-the-customization-template-for-an-oidc-subject-claim-for-an-organization
+
 GitHub Actions の OIDC token の `sub` claim は、デフォルトでは `repo:<owner>/<repo>:ref:refs/heads/<branch>` という形式で `job_workflow_ref` を含みません。
 そのため、 Organization の設定で `sub` claim に `repo` と `job_workflow_ref` を含めるようにカスタマイズします。
 
@@ -115,7 +119,58 @@ gh api -X PUT "/orgs/$ORG/actions/oidc/customization/sub" \
 repository と workflow を別々の condition で指定すると、両者の組み合わせが総当たりで評価され、あるリポジトリが対になっていない別のリポジトリの workflow を使うことを許してしまいます。
 一つの `sub` claim にまとめることで、 repository と workflow の組み合わせを固定できます。
 
-なお、この設定は Organization 全体の OIDC token に影響するため、同じ Organization で OIDC を使っている他の IAM Role などの condition も併せて修正する必要があります。
+AWS の IAM Role の Assume Role Policy で OIDC token の condition に使えるのは `sub`, `aud`, `amr` だけで、 `token.actions.githubusercontent.com:job_workflow_ref` のような condition key は存在しません。
+`job_workflow_ref` を `sub` に含めるカスタマイズが必須なのはこのためです。
+
+#### リポジトリごとに opt in する
+
+Organization のテンプレートは、設定しただけでは各リポジトリに適用されません。
+リポジトリ側が `use_default: true` のままだと GitHub のデフォルトの `sub` が使われ続けます。
+リポジトリごとに `use_default: false` を設定して opt in する必要があります。
+
+```sh
+gh api -X PUT "/repos/$ORG/$REPO/actions/oidc/customization/sub" \
+  --input - <<< '{"use_default":false}'
+```
+
+現在の設定は GET で確認できます。
+
+```sh
+gh api "/repos/$ORG/$REPO/actions/oidc/customization/sub"
+```
+
+opt in を忘れると、 IAM Role 側を正しく設定していても `sub` が一致せず、 `AccessDenied: Not authorized to perform sts:AssumeRoleWithWebIdentity` になります。
+一方で opt in するとそのリポジトリの全ての workflow の `sub` が変わるため、同じリポジトリで OIDC を使っている他の IAM Role などの condition も併せて修正する必要があります。
+
+この endpoint を GitHub App の token で叩く場合、 `actions:write` 権限が必要です。
+REST API のドキュメントには classic PAT の `repo` scope しか記載がありません。
+
+#### immutable subject claims
+
+2026-07-15 以降に作成・リネーム・移譲されたリポジトリでは、 immutable subject claims が自動的に有効になります。
+この場合 `sub` の repository 部分に owner ID と repository ID が埋め込まれます。
+
+```
+repo:<owner>@<owner_id>/<repo>@<repo_id>:job_workflow_ref:<job_workflow_ref>
+```
+
+ID は一度採番されると再利用されないため、リポジトリのリネームや削除・再作成によって別のリポジトリが同じ `sub` を名乗る subject recycling を防げます。
+`include_claim_keys` をカスタマイズしても repository 部分から ID を外すことは出来ません。
+
+ID が入るのは repository 部分だけで、 `job_workflow_ref` 部分は名前ベースのままです。
+
+e.g.
+
+```
+repo:szksh-lab-2@204274656/poc-enterprise-secure-auto-approve@1366980709:job_workflow_ref:szksh-lab-2/poc-enterprise-secure-auto-approve/.github/workflows/auto_approve.yaml@refs/heads/auto-approve
+```
+
+repository 部分は GET で返る `sub_claim_prefix` そのものです。
+
+immutable subject claims の有効・無効は Organization とリポジトリで別々に設定でき、リポジトリ側が優先されます。
+Organization 側が `use_immutable_subject: false` でもリポジトリ側が `true` なら immutable 形式で発行されるので、 Assume Role Policy を書く前にリポジトリ側の設定を確認して下さい。
+
+- https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/
 
 ### Machine User の作成
 
@@ -155,6 +210,10 @@ glob を使って任意の repository で許可すると、 `auto-approve` branc
 
 Terraform であれば `github_repositories` data source でリポジトリのリストを取得し、リポジトリごとに自身の workflow と対にした値を生成することでこれを避けられます。
 ただしこの場合、新しく作成されたリポジトリが apply のたびに自動的に追加されるため、リポジトリの追加に review を挟めなくなる点には注意が必要です。
+
+immutable subject claims が有効なリポジトリでは A に owner ID と repository ID が入るため、リポジトリ名だけでは値を生成できません。
+Terraform で組み立てる場合は data source からリポジトリと Organization の数値 ID を取得する必要があります。
+有効・無効はリポジトリごとに異なりうるので、実際に発行される `sub` を確認してから値を組み立てて下さい。
 
 ### fine-grained PAT を AWS Secrets Manager に保存
 
@@ -298,7 +357,7 @@ jobs:
 このとき、 action を full-length commit SHA で pinning すると SHA の更新の度に OIDC の job_workflow_ref claim の修正が必要になって面倒です。
 そのため、 branch 指定を許容します。
 
-## 詳細
+## 補足
 
 ### GitHub Secrets ではだめなのか
 
@@ -368,6 +427,30 @@ PAT と AWS の認証情報は approve 用の Reusable Workflow の job に存�
 
 - PR に由来する値は `env` 経由で渡し、 `run` に直接展開しない
 - 共有の Reusable Workflow が `inputs` を受け取る場合も、それを `run` に直接展開しない
+
+### 実際の `sub` claim を確認する
+
+Assume Role に失敗したときは、まず実際に発行された `sub` を確認します。
+Organization とリポジトリの設定の組み合わせで形式が変わるため、推測で Assume Role Policy を書くと合わせるのが難しいです。
+
+AWS では CloudTrail の `AssumeRoleWithWebIdentity` イベントに記録されます。
+Assume Role に失敗したイベントでも `sub` は記録されるため、これが最も手軽です。
+
+```sh
+aws cloudtrail lookup-events --region us-east-1 \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity \
+  --start-time 2026-09-13T13:00:00Z \
+  --query 'Events[].CloudTrailEvent' --output text |
+  tr '\t' '\n' |
+  jq -r '.eventTime + " " + (.errorCode // "OK") + " " + .userIdentity.userName'
+```
+
+`userIdentity.userName` が `sub` です。
+STS の global endpoint を使う場合、イベントは `us-east-1` に記録されます。
+CloudTrail への反映には数分かかります。
+
+GitHub 側で確認したい場合は [github/actions-oidc-debugger](https://github.com/github/actions-oidc-debugger) で token の claim を出力できます。
+ただし claim をログに出すことになるので、常設せず確認時のみ使って下さい。
 
 ### Machine User の活動を監視する
 
