@@ -461,6 +461,108 @@ CloudTrail への反映には数分かかります。
 GitHub 側で確認したい場合は [github/actions-oidc-debugger](https://github.com/github/actions-oidc-debugger) で token の claim を出力できます。
 ただし claim をログに出すことになるので、常設せず確認時のみ使って下さい。
 
+### `sub` claim のカスタマイズは破壊的変更になる
+
+`include_claim_keys` の設定は、そのリポジトリが発行する **すべての** OIDC token に一斉に適用されます。
+特定の workflow だけ変えることは出来ません。
+これから作る IAM Role だけの話ではなく、既にそのリポジトリで OIDC を使っている workflow が
+Assume Role に失敗するようになります。
+
+壊れる側の条件 (Assume Role Policy など) は別のリポジトリや別チームの管理下にあることが多く、
+GitHub 側の設定変更なので Terraform の plan にも現れません。
+事前に棚卸ししないと、deploy や release が落ちて初めて気づくことになります。
+
+#### デフォルトの `sub` と `context`
+
+カスタマイズしていない場合の `sub` は `repo:<owner>/<repo>:<context>` で、
+`<context>` はイベントによって変わります。
+
+| トリガー | `<context>` |
+|---|---|
+| branch への push | `ref:refs/heads/<branch>` |
+| tag の push | `ref:refs/tags/<tag>` |
+| pull_request | `pull_request` |
+| environment を使う job | `environment:<environment>` |
+
+`include_claim_keys` は **`sub` 全体を置き換えます**。追記ではありません。
+列挙しなかった要素は消えます。
+
+#### `context` を含めるかどうか
+
+`["repo", "job_workflow_ref"]` にすると `<context>` が丸ごと消えます。
+
+```
+repo:<owner>/<repo>:job_workflow_ref:<owner>/<repo>/.github/workflows/x.yaml@refs/heads/main
+```
+
+branch / tag / environment / pull_request の区別が `sub` から失われるため、
+デフォルトの `sub` に依存していた既存の条件は全滅します。
+
+`context` を含めると、デフォルトの `sub` が prefix として残ります。
+
+```
+# ["repo", "context", "job_workflow_ref"] / push
+repo:<owner>/<repo>:ref:refs/heads/master:job_workflow_ref:<owner>/<repo>/.github/workflows/x.yaml@refs/heads/master
+# ["repo", "context", "job_workflow_ref"] / pull_request
+repo:<owner>/<repo>:pull_request:job_workflow_ref:<owner>/<repo>/.github/workflows/x.yaml@refs/pull/31/merge
+```
+
+既存の条件の末尾に `:job_workflow_ref:*` を足すだけで移行でき、
+branch や environment による制限も維持されます。
+既に OIDC を使っているリポジトリに後から `job_workflow_ref` を導入する場合は、通常こちらを選びます。
+
+なお `ref` も `include_claim_keys` の有効なキーとして受理されます
+(API は未知のキーを `400 The template has one or more unsupported claim keys.` で弾くので、
+これは意味のある確認です)。公式ドキュメントの例には出てきません。
+ただし push では `context` と完全に重複し、 pull_request では `refs/pull/<N>/merge` と
+PR ごとに変わるので、使う理由はほぼありません。
+
+#### どの条件が壊れるか
+
+クラウド側が `sub` をどう書いているかで生死が分かれます。
+
+| 条件の書き方 | `["repo","job_workflow_ref"]` | `["repo","context","job_workflow_ref"]` |
+|---|---|---|
+| `StringEquals` の完全一致 | 壊れる | 壊れる |
+| `StringLike` で末尾 wildcard 無し (`repo:o/r:ref:refs/heads/main`) | 壊れる | 壊れる |
+| `StringLike` で末尾 wildcard 有り (`repo:o/r:ref:refs/heads/main*`) | 壊れる | 生きる |
+| `repo:o/r:*` や `repo:o/*:*` のような広い wildcard | 生きる | 生きる |
+
+`StringLike` は文字列全体の一致なので、末尾に segment が増えた時点で
+wildcard が無ければ一致しません。ここが最も見落とされます。
+
+IAM の `*` は `:` にもマッチするため、`repo:<owner>/*:*` のような条件は形式が変わっても一致し続けます。
+ただし**壊れないことと安全であることは別**で、このような条件はそもそもリポジトリを絞れていません。
+
+失敗は `AccessDenied: Not authorized to perform sts:AssumeRoleWithWebIdentity` として現れます。
+fail-closed なので権限が広がる方向の事故にはなりませんが、
+そのリポジトリで OIDC を使う全ての workflow が同時に停止します。
+
+また、`include_claim_keys` に `environment` を含めると environment の指定が必須になり、
+environment を使っていない job は token を取得できなくなります。
+
+#### 安全な移行手順
+
+既に OIDC を使っているリポジトリを opt in させる場合の手順です。
+
+1. 棚卸しする
+    1. 対象リポジトリで OIDC を使っている workflow を全て洗う (`id-token: write` を grep する)
+    1. それぞれが assume する IAM Role を特定する
+    1. **その Assume Role Policy がどこで管理されているかまで辿る** (別リポジトリのことが多い)
+    1. 各条件が上の表のどのパターンかを分類する
+1. 捨てリポジトリで実際に発行される `sub` を観測する ([実際の `sub` claim を確認する](#実際の-sub-claim-を確認する))
+    - push と pull_request の両方で確認します。値が変わります
+1. Assume Role Policy を先に広げ、新旧両方の `sub` を受け入れる状態にする
+    - この時点ではまだ GitHub 側を変えません
+1. **Organization ではなくリポジトリ単位でテンプレートを切り替える**
+    - `PUT /repos/{owner}/{repo}/actions/oidc/customization/sub` は `use_default` だけでなく
+      `include_claim_keys` も受け付けるので、 Organization を触らずに 1 リポジトリだけで試せます
+    - 影響範囲が 1 リポジトリに閉じ、 rollback も `{"use_default": true}` の PUT で済みます
+1. 棚卸しした workflow を実際に走らせて疎通確認する (push 系と PR 系の両方)
+1. 旧形式の条件を落とす
+1. Organization テンプレートへの昇格は、必要になってから最後に検討する
+    - Organization テンプレートを変えると、 opt in 済みの全リポジトリが同時に影響を受けます
+
 ### Machine User の活動を監視する
 
 仕組みで防ぎきれなかった場合に気づけるよう、 Machine User の活動を監視します。
